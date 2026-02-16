@@ -1,7 +1,6 @@
 #%%writefile bot_main.py
 import time
 import datetime as dt
-import numpy as np
 import os # Needed for environment variables in deployed version
 
 # Import your live strategy functions and Telegram Notifier
