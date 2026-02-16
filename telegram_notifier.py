@@ -1,33 +1,44 @@
-# %%writefile telegram_notifier.py
 import requests
-# In a deployed environment, you would use environment variables:
-# import os
-# TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
-# TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID')
+import os
+import sys
 
-# For local testing, ensure config.py is present or define them here temporarily:
-import config # Assumes config.py is in the same directory
+# Try to import config for local testing, but don't fail if it doesn't exist (for Railway)
+try:
+    import config
+except ImportError:
+    config = None
 
 class TelegramNotifier:
     def __init__(self):
-        # Use environment variables for deployment, fallback to config.py for local testing/development
-        self.bot_token = config.TELEGRAM_BOT_TOKEN # os.getenv('TELEGRAM_BOT_TOKEN')
-        self.chat_id = config.TELEGRAM_CHAT_ID # os.getenv('TELEGRAM_CHAT_ID')
-        self.base_url = f'https://api.telegram.org/bot{self.bot_token}/sendMessage'
+        # 1. Try getting variables from Railway/Environment first
+        # 2. If not found, try getting them from config.py
+        self.bot_token = os.getenv('TELEGRAM_BOT_TOKEN') or (config.TELEGRAM_BOT_TOKEN if config else None)
+        self.chat_id = os.getenv('TELEGRAM_CHAT_ID') or (config.TELEGRAM_CHAT_ID if config else None)
+        
+        # Safety check: Print warning if tokens are missing
+        if not self.bot_token or not self.chat_id:
+            print("WARNING: Telegram Bot Token or Chat ID is missing! Messages will not be sent.")
+            self.base_url = None
+        else:
+            self.base_url = f'https://api.telegram.org/bot{self.bot_token}/sendMessage'
 
     def send_message(self, message):
         """
         Sends a text message to the configured Telegram chat.
         """
+        if not self.base_url:
+            print("Telegram not configured. Skipping message.")
+            return
+
         payload = {
             'chat_id': self.chat_id,
             'text': message,
-            'parse_mode': 'Markdown' # Optional: allows for bold, italics, etc. in messages
+            'parse_mode': 'Markdown' 
         }
         try:
             response = requests.post(self.base_url, data=payload, timeout=5)
-            response.raise_for_status() # Raises HTTPError for bad responses (4xx or 5xx)
-            print(f"Telegram message sent successfully: {message[:50]}...")
+            response.raise_for_status() 
+            print(f"Telegram message sent successfully.")
         except requests.exceptions.RequestException as e:
             print(f"Error sending Telegram message: {e}")
 
@@ -43,4 +54,3 @@ class TelegramNotifier:
             f"_Always manage your risk!_"
         )
         self.send_message(signal_message)
-
