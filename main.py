@@ -1,7 +1,6 @@
 #%%writefile bot_main.py
 import time
 import datetime as dt
-import pandas as pd
 import numpy as np
 import os # Needed for environment variables in deployed version
 
