@@ -1,4 +1,4 @@
-%%writefile config.py
+#%%writefile config.py
 """
 Configuration file for sensitive information.
 
