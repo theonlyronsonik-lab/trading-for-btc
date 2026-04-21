@@ -26,7 +26,7 @@ ALERT_EMAIL = os.getenv("ALERT_EMAIL", "")
 
 SYMBOLS = ["XAU/USD", "GBP/USD", "GBP/JPY", "AUD/USD"]
 INTERVAL     = "5min"   # Lower timeframe (LTF) — entry timing
-HTF_INTERVAL = "1h"     # Higher timeframe (HTF) — divergence filter
+HTF_INTERVAL = "30min"     # Higher timeframe (HTF) — divergence filter
 
 RSI_OVERBOUGHT = 70
 RSI_OVERSOLD = 30
