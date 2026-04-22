@@ -725,15 +725,21 @@ def market_structure(df):
 # ─────────────────────────────────────────────
 
 
-def double_confirm(symbol, signal):
-    if symbol not in signal_stack:
-        signal_stack[symbol] = []
-    signal_stack[symbol].append(signal)
-    if len(signal_stack[symbol]) > 2:
-        signal_stack[symbol].pop(0)
-    if signal_stack[symbol] == ["BUY", "BUY"]:
+def double_confirm(symbol, signal, sig_type=""):
+    """
+    Require two consecutive identical signals before confirming an entry.
+    The stack is keyed by (symbol, sig_type) so that hidden-bull BUY signals
+    cannot accidentally satisfy a regular-bull BUY confirmation, and vice versa.
+    """
+    key = (symbol, sig_type)
+    if key not in signal_stack:
+        signal_stack[key] = []
+    signal_stack[key].append(signal)
+    if len(signal_stack[key]) > 2:
+        signal_stack[key].pop(0)
+    if signal_stack[key] == ["BUY", "BUY"]:
         return "BUY"
-    if signal_stack[symbol] == ["SELL", "SELL"]:
+    if signal_stack[key] == ["SELL", "SELL"]:
         return "SELL"
     return None
 
@@ -1099,8 +1105,10 @@ async def main():
                     }
                     sd = htf_div.setdefault(symbol, {})
                     if consume_hidden:
+                        print(f"[ENTRY] {symbol}: HTF hidden_bull flag consumed — resetting to prevent duplicate entries")
                         sd["hidden_bull"] = False; sd["_hidden_bull_notified"] = False
                     else:
+                        print(f"[ENTRY] {symbol}: HTF bull flag consumed — resetting to prevent duplicate entries")
                         sd["bull"] = False; sd["_bull_notified"] = False
 
                 def _open_sell(entry_label, htf_type, i1, i2, consume_hidden=False):
@@ -1139,8 +1147,10 @@ async def main():
                     }
                     sd = htf_div.setdefault(symbol, {})
                     if consume_hidden:
+                        print(f"[ENTRY] {symbol}: HTF hidden_bear flag consumed — resetting to prevent duplicate entries")
                         sd["hidden_bear"] = False; sd["_hidden_bear_notified"] = False
                     else:
+                        print(f"[ENTRY] {symbol}: HTF bear flag consumed — resetting to prevent duplicate entries")
                         sd["bear"] = False; sd["_bear_notified"] = False
 
                 # ── Opposite-signal close of active trade ──
@@ -1175,81 +1185,117 @@ async def main():
 
                 # ─────────────────────────────────────────────
                 # ENTRY LOGIC  (priority: trend-following > reversal)
+                # Gate: LTF divergence only triggers an entry when the
+                # corresponding HTF divergence flag is already latched True.
+                # Sequence enforced: HTF div detected FIRST → LTF div confirms → entry.
+                # If the HTF flag is absent the signal is logged and skipped.
                 # ─────────────────────────────────────────────
 
                 # 1. Trend-following BUY — HTF hidden bull + LTF hidden bull
-                if hbull and hbull_i2 is not None and htf_hidden_bull:
-                    cdt = _cdt(hbull_i2)
-                    if last_div_time.setdefault(symbol, {}).get("HBULL") != cdt:
-                        if double_confirm(symbol, "BUY") == "BUY":
-                            last_div_time[symbol]["HBULL"] = cdt
-                            _open_buy("Trend-Following", "Hidden Bull", hbull_i1, hbull_i2, consume_hidden=True)
-                            continue
+                if hbull and hbull_i2 is not None:
+                    if not htf_hidden_bull:
+                        # LTF fired but HTF gate is not open — handled by watch alerts below
+                        print(f"[LTF→HTF GATE] {symbol}: LTF hidden bull detected but no active HTF hidden bull — waiting for HTF confirmation, skipping entry")
+                    else:
+                        cdt = _cdt(hbull_i2)
+                        if last_div_time.setdefault(symbol, {}).get("HBULL") != cdt:
+                            if double_confirm(symbol, "BUY", sig_type="HBULL") == "BUY":
+                                print(f"[HTF+LTF ALIGNED] {symbol}: HTF hidden bull ✓ + LTF hidden bull ✓ — executing Trend-Following BUY")
+                                last_div_time[symbol]["HBULL"] = cdt
+                                _open_buy("Trend-Following", "Hidden Bull", hbull_i1, hbull_i2, consume_hidden=True)
+                                continue
+                            else:
+                                print(f"[DOUBLE-CONFIRM] {symbol}: HTF hidden bull ✓ + LTF hidden bull ✓ — waiting for second consecutive LTF confirmation")
 
                 # 2. Trend-following SELL — HTF hidden bear + LTF hidden bear
-                if hbear and hbear_i2 is not None and htf_hidden_bear:
-                    cdt = _cdt(hbear_i2)
-                    if last_div_time.setdefault(symbol, {}).get("HBEAR") != cdt:
-                        if double_confirm(symbol, "SELL") == "SELL":
-                            last_div_time[symbol]["HBEAR"] = cdt
-                            _open_sell("Trend-Following", "Hidden Bear", hbear_i1, hbear_i2, consume_hidden=True)
-                            continue
+                if hbear and hbear_i2 is not None:
+                    if not htf_hidden_bear:
+                        print(f"[LTF→HTF GATE] {symbol}: LTF hidden bear detected but no active HTF hidden bear — waiting for HTF confirmation, skipping entry")
+                    else:
+                        cdt = _cdt(hbear_i2)
+                        if last_div_time.setdefault(symbol, {}).get("HBEAR") != cdt:
+                            if double_confirm(symbol, "SELL", sig_type="HBEAR") == "SELL":
+                                print(f"[HTF+LTF ALIGNED] {symbol}: HTF hidden bear ✓ + LTF hidden bear ✓ — executing Trend-Following SELL")
+                                last_div_time[symbol]["HBEAR"] = cdt
+                                _open_sell("Trend-Following", "Hidden Bear", hbear_i1, hbear_i2, consume_hidden=True)
+                                continue
+                            else:
+                                print(f"[DOUBLE-CONFIRM] {symbol}: HTF hidden bear ✓ + LTF hidden bear ✓ — waiting for second consecutive LTF confirmation")
 
                 # 3. Reversal BUY — HTF regular bull + LTF regular bull
-                if bull and bull_i2 is not None and htf_bull:
-                    cdt = _cdt(bull_i2)
-                    if last_div_time.setdefault(symbol, {}).get("BULL") != cdt:
-                        if double_confirm(symbol, "BUY") == "BUY":
-                            last_div_time[symbol]["BULL"] = cdt
-                            _open_buy("Reversal", "Regular Bull", bull_i1, bull_i2, consume_hidden=False)
-                            continue
+                if bull and bull_i2 is not None:
+                    if not htf_bull:
+                        print(f"[LTF→HTF GATE] {symbol}: LTF regular bull detected but no active HTF regular bull — waiting for HTF confirmation, skipping entry")
+                    else:
+                        cdt = _cdt(bull_i2)
+                        if last_div_time.setdefault(symbol, {}).get("BULL") != cdt:
+                            if double_confirm(symbol, "BUY", sig_type="BULL") == "BUY":
+                                print(f"[HTF+LTF ALIGNED] {symbol}: HTF regular bull ✓ + LTF regular bull ✓ — executing Reversal BUY")
+                                last_div_time[symbol]["BULL"] = cdt
+                                _open_buy("Reversal", "Regular Bull", bull_i1, bull_i2, consume_hidden=False)
+                                continue
+                            else:
+                                print(f"[DOUBLE-CONFIRM] {symbol}: HTF regular bull ✓ + LTF regular bull ✓ — waiting for second consecutive LTF confirmation")
 
                 # 4. Reversal SELL — HTF regular bear + LTF regular bear
-                if bear and bear_i2 is not None and htf_bear:
-                    cdt = _cdt(bear_i2)
-                    if last_div_time.setdefault(symbol, {}).get("BEAR") != cdt:
-                        if double_confirm(symbol, "SELL") == "SELL":
-                            last_div_time[symbol]["BEAR"] = cdt
-                            _open_sell("Reversal", "Regular Bear", bear_i1, bear_i2, consume_hidden=False)
-                            continue
+                if bear and bear_i2 is not None:
+                    if not htf_bear:
+                        print(f"[LTF→HTF GATE] {symbol}: LTF regular bear detected but no active HTF regular bear — waiting for HTF confirmation, skipping entry")
+                    else:
+                        cdt = _cdt(bear_i2)
+                        if last_div_time.setdefault(symbol, {}).get("BEAR") != cdt:
+                            if double_confirm(symbol, "SELL", sig_type="BEAR") == "SELL":
+                                print(f"[HTF+LTF ALIGNED] {symbol}: HTF regular bear ✓ + LTF regular bear ✓ — executing Reversal SELL")
+                                last_div_time[symbol]["BEAR"] = cdt
+                                _open_sell("Reversal", "Regular Bear", bear_i1, bear_i2, consume_hidden=False)
+                                continue
+                            else:
+                                print(f"[DOUBLE-CONFIRM] {symbol}: HTF regular bear ✓ + LTF regular bear ✓ — waiting for second consecutive LTF confirmation")
 
                 # ── Watch alerts — LTF signal with no HTF match (inform, don't enter) ──
-                async def _watch(key, msg_text):
-                    if last_div_time.setdefault(symbol, {}).get(key) != msg_text[:30]:
-                        last_div_time[symbol][key] = msg_text[:30]
+                # Dedup key is the candle ID of the second divergence pivot so each
+                # unique LTF candle only fires one Telegram alert, regardless of how
+                # many scans see the same candle still present.
+                async def _watch(key, candle_id, msg_text):
+                    if last_div_time.setdefault(symbol, {}).get(key) != candle_id:
+                        last_div_time[symbol][key] = candle_id
                         print(msg_text)
                         await send_telegram(msg_text)
 
                 if hbull and hbull_i2 is not None and not htf_hidden_bull:
-                    await _watch("W_HBULL", (
+                    await _watch("W_HBULL", _cdt(hbull_i2), (
                         f"👁 LTF Hidden Bull — {symbol} ({INTERVAL})\n"
+                        f"LTF signal detected but no active HTF hidden bull — waiting for HTF confirmation\n"
                         f"Price: Higher Low | RSI: Lower Low\n"
                         f"Structure: {struct_icon} {htf_structure} | RSI: {rsi}\n"
-                        f"No {HTF_INTERVAL} hidden bull yet — watching, not entering"
+                        f"⏳ No {HTF_INTERVAL} hidden bull yet — watching, not entering"
                     ))
 
                 if hbear and hbear_i2 is not None and not htf_hidden_bear:
-                    await _watch("W_HBEAR", (
+                    await _watch("W_HBEAR", _cdt(hbear_i2), (
                         f"👁 LTF Hidden Bear — {symbol} ({INTERVAL})\n"
+                        f"LTF signal detected but no active HTF hidden bear — waiting for HTF confirmation\n"
                         f"Price: Lower High | RSI: Higher High\n"
                         f"Structure: {struct_icon} {htf_structure} | RSI: {rsi}\n"
-                        f"No {HTF_INTERVAL} hidden bear yet — watching, not entering"
+                        f"⏳ No {HTF_INTERVAL} hidden bear yet — watching, not entering"
                     ))
 
                 if bull and bull_i2 is not None and not htf_bull:
-                    await _watch("W_BULL", (
+                    await _watch("W_BULL", _cdt(bull_i2), (
                         f"👁 LTF Regular Bull — {symbol} ({INTERVAL})\n"
+                        f"LTF signal detected but no active HTF regular bull — waiting for HTF confirmation\n"
                         f"Price: Lower Low | RSI: Higher Low\n"
                         f"Structure: {struct_icon} {htf_structure} | RSI: {rsi}\n"
-                        f"No {HTF_INTERVAL} regular bull yet — watching, not entering"
+                        f"⏳ No {HTF_INTERVAL} regular bull yet — watching, not entering"
                     ))
 
                 if bear and bear_i2 is not None and not htf_bear:
-                    await _watch("W_BEAR", (
+                    await _watch("W_BEAR", _cdt(bear_i2), (
                         f"👁 LTF Regular Bear — {symbol} ({INTERVAL})\n"
+                        f"LTF signal detected but no active HTF regular bear — waiting for HTF confirmation\n"
                         f"Price: Higher High | RSI: Lower High\n"
                         f"Structure: {struct_icon} {htf_structure} | RSI: {rsi}\n"
-                        f"No {HTF_INTERVAL} regular bear yet — watching, not entering"
+                        f"⏳ No {HTF_INTERVAL} regular bear yet — watching, not entering"
                     ))
 
             save_state(sess_on, sessions)
